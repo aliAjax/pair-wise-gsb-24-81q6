@@ -1,158 +1,86 @@
+import { useMemo, useReducer } from "react";
 import "./styles.css";
+import { makeSeed } from "./seed";
+import { reducer, ROLE_NAME } from "./store";
+import { computeStats } from "./engine";
+import type { Role } from "./types";
+import { SquaresPanel } from "./components/SquaresPanel";
+import { BoundariesPanel } from "./components/BoundariesPanel";
+import { UnitsPanel } from "./components/UnitsPanel";
+import { RevisionsPanel } from "./components/RevisionsPanel";
+import { SummaryPanel } from "./components/SummaryPanel";
 
-const project = {
-  "id": "hxwl-10",
-  "port": 5110,
-  "title": "考古探方记录",
-  "subtitle": "遗址探方、地层关系与出土物坐标档案",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#854d0e",
-    "#047857",
-    "#475569"
-  ],
-  "domain": "考古发掘",
-  "users": [
-    "发掘队员",
-    "领队",
-    "资料整理员"
-  ],
-  "metrics": [
-    "探方数",
-    "地层数",
-    "出土物",
-    "未整理记录"
-  ],
-  "filters": [
-    "灰坑",
-    "墓葬",
-    "房址",
-    "沟状遗迹"
-  ],
-  "fields": [
-    "遗址",
-    "探方",
-    "地层",
-    "遗迹单位",
-    "深度",
-    "土色",
-    "坐标点",
-    "出土物"
-  ],
-  "records": [
-    [
-      "T0203",
-      "第3层",
-      "灰褐土",
-      "陶片12件，坐标E3N4"
-    ],
-    [
-      "T0204",
-      "H12灰坑",
-      "黑褐土",
-      "夹炭屑，见动物骨"
-    ],
-    [
-      "T0301",
-      "F2房址",
-      "夯土面",
-      "柱洞关系需复核"
-    ]
-  ]
-};
-
-const statusColors = ["status-ok", "status-watch", "status-danger"];
-
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
-    </article>
-  );
-}
+const ROLES: Role[] = ["field", "reviewer", "leader"];
 
 function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+  const [state, dispatch] = useReducer(reducer, undefined, makeSeed);
+  const stats = useMemo(() => computeStats(state), [state]);
+
+  const metrics = [
+    { label: "探方（联网/总数）", value: `${stats.onlineSquares}/${stats.squares}`, tone: stats.onlineSquares < stats.squares ? "warn" : "ok" },
+    { label: "接界关联 · 待复核", value: `${stats.pendingLinks}/${stats.links}`, tone: stats.pendingLinks ? "danger" : "ok" },
+    { label: "遗迹单位 已校核/待核/错层", value: `${stats.unitOk}/${stats.unitReview}/${stats.unitMismatch}`, tone: stats.unitMismatch ? "danger" : stats.unitReview ? "warn" : "ok" },
+    { label: "已合并观察点", value: String(stats.syncedPoints), tone: "ok" },
+    { label: "断网暂存点（待回网）", value: String(stats.queuedPoints), tone: stats.queuedPoints ? "warn" : "ok" },
+    { label: "失败批次（可单独重试）", value: String(stats.failedBatches), tone: stats.failedBatches ? "danger" : "ok" },
+    { label: "出土物累计", value: String(stats.findQty), tone: "ok" },
+    { label: "地层修订待领队确认", value: String(stats.pendingRevisions), tone: stats.pendingRevisions ? "warn" : "ok" },
+  ];
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-10 · 跨探方关系校核台</p>
+          <h1>考古探方地层接界校核</h1>
+          <p className="subtitle">
+            每个探方保留自己的地层编号与顶底高程；接界关联相邻地层，高差超 2cm 自动进待复核。
+            跨接界遗迹单位在两探方各留观察点、仍是同一个单位。原有观察与出土物归属始终保留。
+          </p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>当前角色（切换查看权限边界）</span>
+          <div className="role-switch">
+            {ROLES.map((r) => (
+              <button
+                key={r}
+                className={state.role === r ? "role-btn active" : "role-btn"}
+                onClick={() => dispatch({ type: "setRole", role: r })}
+              >
+                {ROLE_NAME[r]}
+              </button>
+            ))}
+          </div>
+          <p className="small muted-text">
+            {state.role === "field" && "发掘队员：补观察/观察点（锁定层只能生成修订）、批次回传"}
+            {state.role === "reviewer" && "复核员：更新未锁定地层与接界边界、修正归层，统计即时重算"}
+            {state.role === "leader" && "领队：确认地层锁定、批准或驳回修订，确认后的地层不可直接改"}
+          </p>
         </div>
       </section>
 
-      <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+      <section className="metrics-grid metrics-8">
+        {metrics.map((m) => (
+          <article key={m.label} className="metric-card">
+            <span>{m.label}</span>
+            <strong>{m.value}</strong>
+            <i className={`status-${m.tone === "warn" ? "watch" : m.tone}`} />
+          </article>
         ))}
       </section>
 
-      <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
+      <section className="workspace two-col">
+        <SquaresPanel state={state} dispatch={dispatch} />
+        <BoundariesPanel state={state} dispatch={dispatch} />
       </section>
 
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
+      <section className="workspace single">
+        <UnitsPanel state={state} dispatch={dispatch} />
+      </section>
+
+      <section className="workspace two-col">
+        <RevisionsPanel state={state} dispatch={dispatch} />
+        <SummaryPanel state={state} dispatch={dispatch} />
       </section>
     </main>
   );
